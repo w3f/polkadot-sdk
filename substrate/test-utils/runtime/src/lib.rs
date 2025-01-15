@@ -50,6 +50,10 @@ use sp_application_crypto::Ss58Codec;
 use sp_keyring::AccountKeyring;
 
 use sp_application_crypto::{ecdsa, ed25519, sr25519, RuntimeAppPublic};
+
+#[cfg(feature = "bls-experimental")]
+use sp_application_crypto::{bls381, ecdsa_bls381};
+
 use sp_core::{OpaqueMetadata, RuntimeDebug};
 use sp_trie::{
 	trie_types::{TrieDBBuilder, TrieDBMutBuilderV1},
@@ -181,6 +185,26 @@ pub type Header = sp_runtime::generic::Header<BlockNumber, Hashing>;
 /// Balance of an account.
 pub type Balance = u64;
 
+// Conditional types for `Bls381Signature`
+#[cfg(feature = "bls-experimental")]
+pub mod bls_experimental {
+	use sp_application_crypto::{bls381, ecdsa_bls381};
+    pub type Bls381Public = bls381::AppPublic;
+    pub type EcdsaBls381Public = ecdsa_bls381::AppPublic;
+}
+
+#[cfg(not(feature = "bls-experimental"))]
+pub mod bls_disabled {
+    pub type Bls381Public = ();
+    pub type EcdsaBls381Public = ();
+}
+
+#[cfg(feature = "bls-experimental")]
+pub use bls_experimental::*;
+
+#[cfg(not(feature = "bls-experimental"))]
+pub use bls_disabled::*;
+
 decl_runtime_apis! {
 	#[api_version(2)]
 	pub trait TestAPI {
@@ -206,7 +230,6 @@ decl_runtime_apis! {
 		fn vec_with_capacity(size: u32) -> Vec<u8>;
 		/// Returns the initialized block number.
 		fn get_block_number() -> u64;
-
 		/// Test that `ed25519` crypto works in the runtime.
 		///
 		/// Returns the signature generated for the message `ed25519` and the public key.
@@ -219,6 +242,14 @@ decl_runtime_apis! {
 		///
 		/// Returns the signature generated for the message `ecdsa`.
 		fn test_ecdsa_crypto() -> (ecdsa::AppSignature, ecdsa::AppPublic);
+		/// Test that `bls381` crypto works in the runtime
+		///
+		/// Returns the public key.
+		fn test_bls381_crypto() -> Bls381Public;
+		/// Test that `ecdsa_bls381_crypto` works in the runtime
+		///
+		/// Returns the public key
+		fn test_ecdsa_bls381_crypto() -> EcdsaBls381Public;
 		/// Run various tests against storage.
 		fn test_storage();
 		/// Check a witness.
@@ -580,6 +611,26 @@ impl_runtime_apis! {
 			test_ecdsa_crypto()
 		}
 
+		#[cfg(feature = "bls-experimental")]
+		fn test_bls381_crypto() -> Bls381Public {
+			test_bls381_crypto()
+		}
+
+		#[cfg(feature = "bls-experimental")]
+		fn test_ecdsa_bls381_crypto() -> EcdsaBls381Public {
+			test_ecdsa_bls381_crypto()
+		}
+
+		#[cfg(not(feature = "bls-experimental"))]
+		fn test_bls381_crypto() -> Bls381Public {
+			()
+		}
+
+		#[cfg(not(feature = "bls-experimental"))]
+		fn test_ecdsa_bls381_crypto() {
+			()
+		}
+
 		fn test_storage() {
 			test_read_storage();
 			test_read_child_storage();
@@ -803,6 +854,26 @@ fn test_ecdsa_crypto() -> (ecdsa::AppSignature, ecdsa::AppPublic) {
 
 	assert!(public0.verify(&"ecdsa", &signature));
 	(signature, public0)
+}
+
+#[cfg(feature = "bls-experimental")]
+fn test_bls381_crypto() -> Bls381Public {
+	let mut public0 = bls381::AppPublic::generate_pair(None);
+
+	let pop = public0.generate_pop().expect("Can generate Pop for bls381");
+
+	assert!(public0.verify_pop(&pop));
+	public0
+}
+
+#[cfg(feature = "bls-experimental")]
+fn test_ecdsa_bls381_crypto() -> EcdsaBls381Public {
+	let mut public0 = ecdsa_bls381::AppPublic::generate_pair(None);
+
+	let pop = public0.generate_pop().expect("Can Generate Pop");
+
+	assert!(public0.verify_pop(&pop));
+	public0
 }
 
 fn test_read_storage() {
