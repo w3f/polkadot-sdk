@@ -69,6 +69,8 @@ secp256k1 = { features = [
 
 # bls crypto
 w3f-bls = { optional = true, workspace = true }
+sha2 = { workspace = true }
+
 # bandersnatch crypto
 bandersnatch_vrfs = { git = "https://github.com/davxy/ring-vrf", branch = "locked", default-features = false, features = [
 	"substrate-curves",
