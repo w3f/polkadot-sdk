@@ -3,7 +3,9 @@ use crate::{
     LOG_TARGET,
 };
 
-use std::{sync::Arc, time::Duration, fmt::Display};
+use sp_runtime::traits::Hash;
+
+use std::{fmt::Display, marker::PhantomData, sync::Arc, time::Duration};
 
 use sp_application_crypto::{AppPublic, RuntimeAppPublic};
 
@@ -11,6 +13,9 @@ use codec::{Encode, Decode, DecodeWithMemTracking};
 use scale_info::TypeInfo;
 
 use sc_network::{NetworkPeers, ReputationChange};
+
+use parking_lot::{Mutex, RwLock};
+use wasm_timer::Instant;
 
 const REBROADCAST_AFTER: Duration = Duration::from_secs(5);
 
@@ -64,6 +69,25 @@ pub trait AuthorityIdBound:
 
 }
 
+impl<AuthorityId: AuthorityIdBound> GossipMessage<AuthorityId> {
+    pub fn unwrap_dealing(
+        self
+    ) -> Option<DealingMessage<Dealing<Vec<u8>>, AuthorityId, <AuthorityId as RuntimeAppPublic>::Signature>> {
+        match self {
+            GossipMessage::Dealing(dealing) => Some(dealing),
+            GossipMessage::Temp => None,
+        }
+    }
+}
+
+/// Gossip engine dealings messages topic
+pub(crate) fn dealings_topic<H: Hash>() -> H::Output
+where
+	H: Hash,
+{
+	H::hash_of(b"dkg-dealing")
+}
+
 // TEMP replace with BLS-381..
 // TODO: Goes in a primitive folder for DKG
 /// DKG cryptographic types for ECDSA crypto
@@ -96,4 +120,24 @@ pub mod ecdsa_crypto {
 	impl AuthorityIdBound for AuthorityId {
 
 	}
+}
+
+
+// TODO: Add Gossip Filters ? Which to Add?
+
+pub struct Filter<AuthorityId>(PhantomData<AuthorityId>);
+
+
+/// DKG gossip validator
+///
+/// Validate DKG gossip messages and produce dealings.
+pub(crate) struct GossipValidator<H, N, AuthorityId: AuthorityIdBound>
+where
+    H: Hash
+{
+	dealings_topic: H,
+	gossip_filter: RwLock<Filter<AuthorityId>>,
+	next_rebroadcast: Mutex<Instant>,
+	known_peers: Arc<Mutex<KnownPeers<H>>>,
+	network: Arc<N>,
 }
