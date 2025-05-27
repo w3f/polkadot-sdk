@@ -8,10 +8,10 @@ pub(crate) mod dkg_protocol_name {
 	use sc_network::ProtocolName;
 
 	// TODO: What are we exactly gossiping to other validators in the DKG? What are we sending? Are we broadcasting something or just sending to individuals?
-	/// DKG shares gossip protocol name suffix.
+	/// DKG dealings gossip protocol name suffix.
 	const GOSSIP_NAME: &str = "/dkg/2";
 
-	/// Name of the shares gossip protocol used by the DKG.
+	/// Name of the dealings gossip protocol used by the DKG.
 	///
 	/// Must be registered towards the networking in order for DKG participant to properly function.
 	pub fn gossip_protocol_name<Hash: AsRef<[u8]>>(
@@ -63,13 +63,13 @@ mod cost {
 	pub(super) const OUTDATED_MESSAGE: Rep = Rep::new(-50, "DKG: Past message");
 	// Message that's from the future relative to our current set-id.
 	pub(super) const FUTURE_MESSAGE: Rep = Rep::new(-100, "DKG: Future message");
-	// DKG message share containing bad signature.
+	// DKG message dealing containing bad signature.
 	pub(super) const BAD_SIGNATURE: Rep = Rep::new(-100, "DKG: Bad signature");
-	// Message received with share from participant not in validator set.
+	// Message received with dealing from participant not in validator set.
 	pub(super) const UNKNOWN_PARTICIPANT: Rep = Rep::new(-150, "DKG: Unknown participant");
-	// Message containing invalid share.
-	pub(super) const INVALID_SHARE: Rep = Rep::new(-5000, "DKG: Invalid share");
-	// Reputation cost per signature checked for invalid share.
+	// Message containing invalid dealing.
+	pub(super) const INVALID_DEALING: Rep = Rep::new(-5000, "DKG: Invalid dealing");
+	// Reputation cost per signature checked for invalid dealing.
 	pub(super) const PER_SIGNATURE_CHECKED: i32 = -25;
 	// Reputation cost per byte for un-decodable message.
 	pub(super) const PER_UNDECODABLE_BYTE: i32 = -5;
@@ -78,6 +78,6 @@ mod cost {
 // benefit scalars for reporting peers.
 mod benefit {
 	use sc_network::ReputationChange as Rep;
-	pub(super) const SHARE_MESSAGE: Rep = Rep::new(100, "DKG: share message");
+	pub(super) const DEALING_MESSAGE: Rep = Rep::new(100, "DKG: dealing message");
 	pub(super) const NOT_INTERESTED: Rep = Rep::new(10, "DKG: Not interested in round");
 }

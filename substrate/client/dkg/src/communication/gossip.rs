@@ -1,5 +1,5 @@
 use crate::{
-	communication::{benefit, cost, peers::KnownPeers, notification::Share},
+	communication::{benefit, cost, peers::KnownPeers, notification::Dealing},
     LOG_TARGET,
 };
 
@@ -33,13 +33,13 @@ enum Consider {
 	CannotEvaluate,
 }
 
-/// DKG Share Message.
+/// DKG Dealing Message.
 ///
-/// A Share message is an elliptic curve point shared in our DKG scheme with a BLS signature attached
+/// A Dealing message is the dealing of a single participant in our DKG scheme with a signature attached
 #[derive(Clone, Debug, Decode, DecodeWithMemTracking, Encode, PartialEq, TypeInfo)]
-pub struct ShareMessage<Share, Id, Signature> {
+pub struct DealingMessage<Dealing, Id, Signature> {
 	/// Commit to information extracted from a finalized block
-	pub share: Share,
+	pub dealing: Dealing,
     /// Node authority id
 	pub id: Id,
 	/// Node signature
@@ -50,7 +50,7 @@ pub struct ShareMessage<Share, Id, Signature> {
 #[derive(Debug, Encode, Decode)]
 pub(crate) enum GossipMessage<AuthorityId: AuthorityIdBound> {
 	/// DKG message with commitment and single signature.
-	Share(ShareMessage<Share<Vec<u8>>, AuthorityId, <AuthorityId as RuntimeAppPublic>::Signature>),
+	Dealing(DealingMessage<Dealing<Vec<u8>>, AuthorityId, <AuthorityId as RuntimeAppPublic>::Signature>),
     // TODO: Add another message?
     Temp,
 }
