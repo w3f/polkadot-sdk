@@ -1,97 +1,77 @@
 // Copyright (C) Parity Technologies (UK) Ltd.
-// SPDX-License-Identifier: Apache-2.0
+// This file is part of Cumulus.
 
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// 	http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Cumulus is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
 
-//! # Glutton Westend Runtime
+// Cumulus is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+
+// You should have received a copy of the GNU General Public License
+// along with Cumulus.  If not, see <http://www.gnu.org/licenses/>.
+
+//! # Shell Runtime
 //!
-//! The purpose of the Glutton parachain is to do stress testing on the Kusama
-//! network. This runtime targets the Westend runtime to allow development
-//! separate to the Kusama runtime.
+//! The Shell runtime defines a minimal parachain. It can listen for a downward message authorizing
+//! an upgrade into another parachain.
 //!
-//! There may be multiple instances of the Glutton parachain deployed and
-//! connected to its parent relay chain.
-//!
-//! These parachains are not holding any real value. Their purpose is to stress
-//! test the network.
-//!
-//! ### Governance
-//!
-//! Glutton defers its governance (namely, its `Root` origin), to its Relay
-//! Chain parent, Kusama (or Westend for development purposes).
-//!
-//! ### XCM
-//!
-//! Since the main goal of Glutton is solely stress testing, the parachain will
-//! only be able receive XCM messages from the Relay Chain via DMP. This way the
-//! Glutton parachains will be able to listen for upgrades that are coming from
-//! the Relay chain.
+//! Generally (so far) only used as the first parachain on a Relay.
 
 #![cfg_attr(not(feature = "std"), no_std)]
+// `construct_runtime!` does a lot of recursion and requires us to increase the limit to 256.
 #![recursion_limit = "256"]
 
 // Make the WASM binary available.
 #[cfg(feature = "std")]
 include!(concat!(env!("OUT_DIR"), "/wasm_binary.rs"));
 
-pub mod genesis_config_presets;
-pub mod weights;
 pub mod xcm_config;
 
 extern crate alloc;
 
 use alloc::{vec, vec::Vec};
+use codec::{Decode, Encode};
 use cumulus_pallet_parachain_system::RelayNumberMonotonicallyIncreases;
+use cumulus_primitives_core::AggregateMessageOrigin;
+use frame_support::unsigned::TransactionValidityError;
+use scale_info::TypeInfo;
 use sp_api::impl_runtime_apis;
 pub use sp_consensus_aura::sr25519::AuthorityId as AuraId;
 use sp_core::{crypto::KeyTypeId, OpaqueMetadata};
 use sp_runtime::{
-	generic, impl_opaque_keys,
-	traits::{BlakeTwo256, Block as BlockT},
+	create_runtime_str, generic, impl_opaque_keys,
+	traits::{AccountIdLookup, BlakeTwo256, Block as BlockT, DispatchInfoOf},
 	transaction_validity::{TransactionSource, TransactionValidity},
 	ApplyExtrinsicResult,
 };
-use sp_session::OpaqueGeneratedSessionKeys;
 #[cfg(feature = "std")]
 use sp_version::NativeVersion;
 use sp_version::RuntimeVersion;
 
-use cumulus_primitives_core::{AggregateMessageOrigin, ClaimQueueOffset, CoreSelector, ParaId};
+// A few exports that help ease life for downstream crates.
 pub use frame_support::{
 	construct_runtime, derive_impl,
 	dispatch::DispatchClass,
 	genesis_builder_helper::{build_state, get_preset},
 	parameter_types,
-	traits::{
-		ConstBool, ConstU32, ConstU64, ConstU8, EitherOfDiverse, Everything, IsInVec, Randomness,
-	},
+	traits::{ConstBool, ConstU32, ConstU64, ConstU8, EitherOfDiverse, IsInVec, Randomness},
 	weights::{
 		constants::{
 			BlockExecutionWeight, ExtrinsicBaseWeight, RocksDbWeight, WEIGHT_REF_TIME_PER_SECOND,
 		},
 		IdentityFee, Weight,
 	},
-	PalletId, StorageValue,
+	StorageValue,
 };
-use frame_system::{
-	limits::{BlockLength, BlockWeights},
-	EnsureRoot,
-};
+use frame_system::limits::{BlockLength, BlockWeights};
 use parachains_common::{AccountId, Signature};
 #[cfg(any(feature = "std", test))]
 pub use sp_runtime::BuildStorage;
 pub use sp_runtime::{Perbill, Permill};
-use testnet_parachains_constants::westend::consensus::*;
 
 impl_opaque_keys! {
 	pub struct SessionKeys {
@@ -99,16 +79,17 @@ impl_opaque_keys! {
 	}
 }
 
+/// This runtime version.
 #[sp_version::runtime_version]
 pub const VERSION: RuntimeVersion = RuntimeVersion {
-	spec_name: alloc::borrow::Cow::Borrowed("glutton-westend"),
-	impl_name: alloc::borrow::Cow::Borrowed("glutton-westend"),
+	spec_name: create_runtime_str!("shell"),
+	impl_name: create_runtime_str!("shell"),
 	authoring_version: 1,
-	spec_version: 1_019_002,
+	spec_version: 2,
 	impl_version: 0,
 	apis: RUNTIME_API_VERSIONS,
 	transaction_version: 1,
-	system_version: 1,
+	state_version: 0,
 };
 
 /// The version information used to identify this runtime when compiled natively.
@@ -117,15 +98,29 @@ pub fn native_version() -> NativeVersion {
 	NativeVersion { runtime_version: VERSION, can_author_with: Default::default() }
 }
 
+/// Maximum number of blocks simultaneously accepted by the Runtime, not yet included
+/// into the relay chain.
+const UNINCLUDED_SEGMENT_CAPACITY: u32 = 1;
+/// How many parachain blocks are processed by the relay chain per parent. Limits the
+/// number of blocks authored per slot.
+const BLOCK_PROCESSING_VELOCITY: u32 = 1;
+/// Relay chain slot duration, in milliseconds.
+const RELAY_CHAIN_SLOT_DURATION_MILLIS: u32 = 6000;
+
 /// We assume that ~10% of the block weight is consumed by `on_initialize` handlers.
 /// This is used to limit the maximal weight of a single extrinsic.
 const AVERAGE_ON_INITIALIZE_RATIO: Perbill = Perbill::from_percent(10);
 /// We allow `Normal` extrinsics to fill up the block up to 75%, the rest can be used
 /// by  Operational  extrinsics.
 const NORMAL_DISPATCH_RATIO: Perbill = Perbill::from_percent(75);
+/// We allow for .5 seconds of compute with a 12 second average block time.
+const MAXIMUM_BLOCK_WEIGHT: Weight = Weight::from_parts(
+	WEIGHT_REF_TIME_PER_SECOND.saturating_div(2),
+	cumulus_primitives_core::relay_chain::MAX_POV_SIZE as u64,
+);
 
 parameter_types! {
-	pub const BlockHashCount: BlockNumber = 4096;
+	pub const BlockHashCount: BlockNumber = 250;
 	pub const Version: RuntimeVersion = VERSION;
 	pub RuntimeBlockLength: BlockLength =
 		BlockLength::max_with_normal_ratio(5 * 1024 * 1024, NORMAL_DISPATCH_RATIO);
@@ -150,14 +145,38 @@ parameter_types! {
 	pub const SS58Prefix: u8 = 42;
 }
 
-#[derive_impl(frame_system::config_preludes::ParaChainDefaultConfig)]
+#[derive_impl(frame_system::config_preludes::TestDefaultConfig)]
 impl frame_system::Config for Runtime {
+	/// The identifier used to distinguish between accounts.
 	type AccountId = AccountId;
+	/// The aggregated dispatch type that is available for extrinsics.
+	type RuntimeCall = RuntimeCall;
+	/// The lookup mechanism to get account ID from whatever is passed in dispatchers.
+	type Lookup = AccountIdLookup<AccountId, ()>;
+	/// The index type for storing how many extrinsics an account has signed.
 	type Nonce = Nonce;
+	/// The type for hashing blocks and tries.
 	type Hash = Hash;
+	/// The hashing algorithm used.
+	type Hashing = BlakeTwo256;
+	/// The block type.
 	type Block = Block;
+	/// The ubiquitous event type.
+	type RuntimeEvent = RuntimeEvent;
+	/// The ubiquitous origin type.
+	type RuntimeOrigin = RuntimeOrigin;
+	/// Maximum number of block number to block hash mappings to keep (oldest pruned first).
 	type BlockHashCount = BlockHashCount;
+	/// Runtime version.
 	type Version = Version;
+	/// Converts a module to an index of this module in the runtime.
+	type PalletInfo = PalletInfo;
+	type AccountData = ();
+	type OnNewAccount = ();
+	type OnKilledAccount = ();
+	type DbWeight = ();
+	type BaseCallFilter = frame_support::traits::Everything;
+	type SystemWeightInfo = ();
 	type BlockWeights = RuntimeBlockWeights;
 	type BlockLength = RuntimeBlockLength;
 	type SS58Prefix = SS58Prefix;
@@ -166,42 +185,38 @@ impl frame_system::Config for Runtime {
 }
 
 parameter_types! {
-	// We do anything the parent chain tells us in this runtime.
-	pub const ReservedDmpWeight: Weight = MAXIMUM_BLOCK_WEIGHT.saturating_div(2);
 	pub const RelayOrigin: AggregateMessageOrigin = AggregateMessageOrigin::Parent;
+	pub const ReservedDmpWeight: Weight = MAXIMUM_BLOCK_WEIGHT.saturating_div(4);
 }
 
-type ConsensusHook = cumulus_pallet_aura_ext::FixedVelocityConsensusHook<
-	Runtime,
-	RELAY_CHAIN_SLOT_DURATION_MILLIS,
-	3,
-	9,
->;
-
 impl cumulus_pallet_parachain_system::Config for Runtime {
+	type WeightInfo = ();
 	type RuntimeEvent = RuntimeEvent;
 	type OnSystemEvent = ();
 	type SelfParaId = parachain_info::Pallet<Runtime>;
-	type DmpQueue = frame_support::traits::EnqueueWithOrigin<MessageQueue, RelayOrigin>;
 	type OutboundXcmpMessageSource = ();
+	type DmpQueue = frame_support::traits::EnqueueWithOrigin<MessageQueue, RelayOrigin>;
 	type ReservedDmpWeight = ReservedDmpWeight;
 	type XcmpMessageHandler = ();
 	type ReservedXcmpWeight = ();
 	type CheckAssociatedRelayNumber = RelayNumberMonotonicallyIncreases;
-	type ConsensusHook = ConsensusHook;
-	type WeightInfo = weights::cumulus_pallet_parachain_system::WeightInfo<Runtime>;
-	type SelectCore = cumulus_pallet_parachain_system::DefaultCoreSelector<Runtime>;
-	type RelayParentOffset = ConstU32<0>;
+	type ConsensusHook = cumulus_pallet_aura_ext::FixedVelocityConsensusHook<
+		Runtime,
+		RELAY_CHAIN_SLOT_DURATION_MILLIS,
+		BLOCK_PROCESSING_VELOCITY,
+		UNINCLUDED_SEGMENT_CAPACITY,
+	>;
 }
 
+impl parachain_info::Config for Runtime {}
+
 parameter_types! {
-	pub MessageQueueServiceWeight: Weight = Perbill::from_percent(80) *
-		RuntimeBlockWeights::get().max_block;
+	pub MessageQueueServiceWeight: Weight = Perbill::from_percent(35) * RuntimeBlockWeights::get().max_block;
 }
 
 impl pallet_message_queue::Config for Runtime {
 	type RuntimeEvent = RuntimeEvent;
-	type WeightInfo = weights::pallet_message_queue::WeightInfo<Runtime>;
+	type WeightInfo = ();
 	#[cfg(feature = "runtime-benchmarks")]
 	type MessageProcessor = pallet_message_queue::mock_helpers::NoopMessageProcessor<
 		cumulus_primitives_core::AggregateMessageOrigin,
@@ -213,8 +228,8 @@ impl pallet_message_queue::Config for Runtime {
 		RuntimeCall,
 	>;
 	type Size = u32;
+	// These need to be configured to the XCMP pallet - if it is deployed.
 	type QueueChangeHandler = ();
-	// No XCMP queue pallet deployed.
 	type QueuePausedQuery = ();
 	type HeapSize = sp_core::ConstU32<{ 103 * 1024 }>;
 	type MaxStale = sp_core::ConstU32<8>;
@@ -222,58 +237,72 @@ impl pallet_message_queue::Config for Runtime {
 	type IdleMaxServiceWeight = MessageQueueServiceWeight;
 }
 
-impl parachain_info::Config for Runtime {}
-
 impl cumulus_pallet_aura_ext::Config for Runtime {}
-
-impl pallet_timestamp::Config for Runtime {
-	type Moment = u64;
-	type OnTimestampSet = Aura;
-	type MinimumPeriod = ConstU64<0>;
-	type WeightInfo = weights::pallet_timestamp::WeightInfo<Runtime>;
-}
 
 impl pallet_aura::Config for Runtime {
 	type AuthorityId = AuraId;
 	type DisabledValidators = ();
 	type MaxAuthorities = ConstU32<100_000>;
-	type AllowMultipleBlocksPerSlot = ConstBool<true>;
-	type SlotDuration = ConstU64<2000>;
+	type AllowMultipleBlocksPerSlot = ConstBool<false>;
+	type SlotDuration = pallet_aura::MinimumPeriodTimesTwo<Self>;
 }
 
-impl pallet_glutton::Config for Runtime {
-	type RuntimeEvent = RuntimeEvent;
-	type WeightInfo = weights::pallet_glutton::WeightInfo<Runtime>;
-	type AdminOrigin = EnsureRoot<AccountId>;
-}
-
-impl pallet_sudo::Config for Runtime {
-	type RuntimeEvent = RuntimeEvent;
-	type RuntimeCall = RuntimeCall;
+impl pallet_timestamp::Config for Runtime {
+	type Moment = u64;
+	type OnTimestampSet = Aura;
+	type MinimumPeriod = ConstU64<0>;
 	type WeightInfo = ();
 }
 
 construct_runtime! {
 	pub enum Runtime
 	{
-		System: frame_system = 0,
-		ParachainSystem: cumulus_pallet_parachain_system = 1,
-		ParachainInfo: parachain_info = 2,
-		Timestamp: pallet_timestamp = 3,
+		System: frame_system,
+		Timestamp: pallet_timestamp,
 
-		// DMP handler.
-		CumulusXcm: cumulus_pallet_xcm = 10,
-		MessageQueue: pallet_message_queue = 11,
+		ParachainSystem: cumulus_pallet_parachain_system,
+		ParachainInfo: parachain_info,
 
-		// The main stage.
-		Glutton: pallet_glutton = 20,
+		CumulusXcm: cumulus_pallet_xcm,
+		MessageQueue: pallet_message_queue,
 
-		// Collator support
-		Aura: pallet_aura = 30,
-		AuraExt: cumulus_pallet_aura_ext = 31,
+		Aura: pallet_aura,
+		AuraExt: cumulus_pallet_aura_ext,
+	}
+}
 
-		// Sudo.
-		Sudo: pallet_sudo = 255,
+/// Simple implementation which fails any transaction which is signed.
+#[derive(Eq, PartialEq, Clone, Default, sp_core::RuntimeDebug, Encode, Decode, TypeInfo)]
+pub struct DisallowSigned;
+impl sp_runtime::traits::SignedExtension for DisallowSigned {
+	const IDENTIFIER: &'static str = "DisallowSigned";
+	type AccountId = AccountId;
+	type Call = RuntimeCall;
+	type AdditionalSigned = ();
+	type Pre = ();
+	fn additional_signed(
+		&self,
+	) -> core::result::Result<(), sp_runtime::transaction_validity::TransactionValidityError> {
+		Ok(())
+	}
+	fn pre_dispatch(
+		self,
+		who: &Self::AccountId,
+		call: &Self::Call,
+		info: &DispatchInfoOf<Self::Call>,
+		len: usize,
+	) -> Result<Self::Pre, TransactionValidityError> {
+		self.validate(who, call, info, len).map(|_| ())
+	}
+	fn validate(
+		&self,
+		_who: &Self::AccountId,
+		_call: &Self::Call,
+		_info: &sp_runtime::traits::DispatchInfoOf<Self::Call>,
+		_len: usize,
+	) -> TransactionValidity {
+		let i = sp_runtime::transaction_validity::InvalidTransaction::BadProof;
+		Err(sp_runtime::transaction_validity::TransactionValidityError::Invalid(i))
 	}
 }
 
@@ -293,21 +322,11 @@ pub type Block = generic::Block<Header, UncheckedExtrinsic>;
 pub type SignedBlock = generic::SignedBlock<Block>;
 /// BlockId type as expected by this runtime.
 pub type BlockId = generic::BlockId<Block>;
-/// The extension to the basic transaction logic.
-pub type TxExtension = (
-	frame_system::AuthorizeCall<Runtime>,
-	pallet_sudo::CheckOnlySudoAccount<Runtime>,
-	frame_system::CheckNonZeroSender<Runtime>,
-	frame_system::CheckSpecVersion<Runtime>,
-	frame_system::CheckTxVersion<Runtime>,
-	frame_system::CheckGenesis<Runtime>,
-	frame_system::CheckEra<Runtime>,
-	frame_system::CheckWeight<Runtime>,
-	frame_system::WeightReclaim<Runtime>,
-);
+/// The SignedExtension to the basic transaction logic.
+pub type SignedExtra = DisallowSigned;
 /// Unchecked extrinsic type as expected by this runtime.
 pub type UncheckedExtrinsic =
-	generic::UncheckedExtrinsic<Address, RuntimeCall, Signature, TxExtension>;
+	generic::UncheckedExtrinsic<Address, RuntimeCall, Signature, SignedExtra>;
 /// Executive: handles dispatch to the various modules.
 pub type Executive = frame_executive::Executive<
 	Runtime,
@@ -317,19 +336,17 @@ pub type Executive = frame_executive::Executive<
 	AllPalletsWithSystem,
 >;
 
-#[cfg(feature = "runtime-benchmarks")]
-mod benches {
-	frame_benchmarking::define_benchmarks!(
-		[cumulus_pallet_parachain_system, ParachainSystem]
-		[frame_system, SystemBench::<Runtime>]
-		[frame_system_extensions, SystemExtensionsBench::<Runtime>]
-		[pallet_glutton, Glutton]
-		[pallet_message_queue, MessageQueue]
-		[pallet_timestamp, Timestamp]
-	);
-}
-
 impl_runtime_apis! {
+	impl sp_consensus_aura::AuraApi<Block, AuraId> for Runtime {
+		fn slot_duration() -> sp_consensus_aura::SlotDuration {
+			sp_consensus_aura::SlotDuration::from_millis(Aura::slot_duration())
+		}
+
+		fn authorities() -> Vec<AuraId> {
+			pallet_aura::Authorities::<Runtime>::get().into_inner()
+		}
+	}
+
 	impl sp_api::Core<Block> for Runtime {
 		fn version() -> RuntimeVersion {
 			VERSION
@@ -355,31 +372,6 @@ impl_runtime_apis! {
 
 		fn metadata_versions() -> alloc::vec::Vec<u32> {
 			Runtime::metadata_versions()
-		}
-	}
-
-	impl sp_consensus_aura::AuraApi<Block, AuraId> for Runtime {
-		fn slot_duration() -> sp_consensus_aura::SlotDuration {
-			sp_consensus_aura::SlotDuration::from_millis(Aura::slot_duration())
-		}
-
-		fn authorities() -> Vec<AuraId> {
-			pallet_aura::Authorities::<Runtime>::get().into_inner()
-		}
-	}
-
-	impl cumulus_primitives_core::RelayParentOffsetApi<Block> for Runtime {
-		fn relay_parent_offset() -> u32 {
-			0
-		}
-	}
-
-	impl cumulus_primitives_aura::AuraUnincludedSegmentApi<Block> for Runtime {
-		fn can_build_upon(
-			included_hash: <Block as BlockT>::Hash,
-			slot: cumulus_primitives_aura::Slot,
-		) -> bool {
-			ConsensusHook::can_build_upon(included_hash, slot)
 		}
 	}
 
@@ -420,8 +412,8 @@ impl_runtime_apis! {
 	}
 
 	impl sp_session::SessionKeys<Block> for Runtime {
-		fn generate_session_keys(owner: Vec<u8>, seed: Option<Vec<u8>>) -> OpaqueGeneratedSessionKeys {
-			SessionKeys::generate(&owner, seed).into()
+		fn generate_session_keys(_: Vec<u8>, _: Option<Vec<u8>>) -> sp_session::OpaqueGeneratedSessionKeys {
+			sp_session::OpaqueGeneratedSessionKeys { keys: Vec::new(), proof: Vec::new() }
 		}
 
 		fn decode_session_keys(
@@ -437,84 +429,17 @@ impl_runtime_apis! {
 		}
 	}
 
-	impl cumulus_primitives_core::GetCoreSelectorApi<Block> for Runtime {
-		fn core_selector() -> (CoreSelector, ClaimQueueOffset) {
-			ParachainSystem::core_selector()
-		}
-	}
-
-	impl frame_system_rpc_runtime_api::AccountNonceApi<Block, AccountId, Nonce> for Runtime {
-		fn account_nonce(account: AccountId) -> Nonce {
-			System::account_nonce(account)
-		}
-	}
-
-	#[cfg(feature = "runtime-benchmarks")]
-	impl frame_benchmarking::Benchmark<Block> for Runtime {
-		fn benchmark_metadata(extra: bool) -> (
-			Vec<frame_benchmarking::BenchmarkList>,
-			Vec<frame_support::traits::StorageInfo>,
-		) {
-			use frame_benchmarking::BenchmarkList;
-			use frame_support::traits::StorageInfoTrait;
-			use frame_system_benchmarking::Pallet as SystemBench;
-			use frame_system_benchmarking::extensions::Pallet as SystemExtensionsBench;
-
-			let mut list = Vec::<BenchmarkList>::new();
-			list_benchmarks!(list, extra);
-
-			let storage_info = AllPalletsWithSystem::storage_info();
-
-			(list, storage_info)
-		}
-
-		#[allow(non_local_definitions)]
-		fn dispatch_benchmark(
-			config: frame_benchmarking::BenchmarkConfig
-		) -> Result<Vec<frame_benchmarking::BenchmarkBatch>, alloc::string::String> {
-			use frame_benchmarking::{BenchmarkBatch,  BenchmarkError};
-			use sp_storage::TrackedStorageKey;
-
-			use frame_system_benchmarking::Pallet as SystemBench;
-			use frame_system_benchmarking::extensions::Pallet as SystemExtensionsBench;
-			impl frame_system_benchmarking::Config for Runtime {
-				fn setup_set_code_requirements(code: &alloc::vec::Vec<u8>) -> Result<(), BenchmarkError> {
-					ParachainSystem::initialize_for_set_code_benchmark(code.len() as u32);
-					Ok(())
-				}
-
-				fn verify_set_code() {
-					System::assert_last_event(cumulus_pallet_parachain_system::Event::<Runtime>::ValidationFunctionStored.into());
-				}
-			}
-
-			use frame_support::traits::WhitelistedStorageKeys;
-			let whitelist: Vec<TrackedStorageKey> = AllPalletsWithSystem::whitelisted_storage_keys();
-
-			let mut batches = Vec::<BenchmarkBatch>::new();
-			let params = (&config, &whitelist);
-			add_benchmarks!(params, batches);
-			Ok(batches)
-		}
-	}
-
 	impl sp_genesis_builder::GenesisBuilder<Block> for Runtime {
 		fn build_state(config: Vec<u8>) -> sp_genesis_builder::Result {
 			build_state::<RuntimeGenesisConfig>(config)
 		}
 
 		fn get_preset(id: &Option<sp_genesis_builder::PresetId>) -> Option<Vec<u8>> {
-			get_preset::<RuntimeGenesisConfig>(id, &genesis_config_presets::get_preset)
+			get_preset::<RuntimeGenesisConfig>(id, |_| None)
 		}
 
 		fn preset_names() -> Vec<sp_genesis_builder::PresetId> {
-			genesis_config_presets::preset_names()
-		}
-	}
-
-	impl cumulus_primitives_core::GetParachainInfo<Block> for Runtime {
-		fn parachain_id() -> ParaId {
-			ParachainInfo::parachain_id()
+			vec![]
 		}
 	}
 }

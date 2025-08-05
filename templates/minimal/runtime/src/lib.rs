@@ -25,13 +25,25 @@ include!(concat!(env!("OUT_DIR"), "/wasm_binary.rs"));
 
 extern crate alloc;
 
-use alloc::vec::Vec;
+use frame::{
+	prelude::*,
+	runtime::{
+		prelude::*,
+use alloc::{vec, vec::Vec};
 use pallet_transaction_payment::{FeeDetails, RuntimeDispatchInfo};
 use polkadot_sdk::{
 	polkadot_sdk_frame::{
 		self as frame,
+	    deps::frame_support::{
+		    genesis_builder_helper::{build_state, get_preset}
+        },
 		deps::sp_genesis_builder,
-		runtime::{apis, prelude::*},
+		runtime::{apis, apis::{
+			self, impl_runtime_apis, ApplyExtrinsicResult, CheckInherentsResult,
+			ExtrinsicInclusionMode, OpaqueGeneratedSessionKeys, OpaqueMetadata,
+		},
+                  prelude::*},
+		weights::{FixedFee, NoFee},
 	},
 	*,
 };
@@ -282,8 +294,8 @@ impl_runtime_apis! {
 	}
 
 	impl apis::SessionKeys<Block> for Runtime {
-		fn generate_session_keys(_seed: Option<Vec<u8>>) -> Vec<u8> {
-			Default::default()
+		fn generate_session_keys(_owner: Vec<u8>, _seed: Option<Vec<u8>>) -> OpaqueGeneratedSessionKeys {
+			OpaqueGeneratedSessionKeys { keys: Default::default(), proof: Default::default() }
 		}
 
 		fn decode_session_keys(
