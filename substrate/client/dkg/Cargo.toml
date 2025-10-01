@@ -20,6 +20,7 @@ futures = { workspace = true }
 log = { workspace = true, default-features = true }
 parking_lot = { workspace = true, default-features = true }
 prometheus-endpoint = { workspace = true, default-features = true }
+rand = { workspace = true }
 scale-info = { features = ["derive"], workspace = true }
 sc-client-api = { workspace = true, default-features = true }
 sc-consensus = { workspace = true, default-features = true }
@@ -39,6 +40,12 @@ sp-runtime = { workspace = true, default-features = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, default-features = true }
 wasm-timer = { workspace = true }
+
+adkg-vrf = { git = "https://github.com/w3f/adkg-vrf.git" }
+
+ark-ec = { version = "0.5", default-features = false }
+ark-poly = { version = "0.5", default-features = false }
+
 
 [dev-dependencies]
 sc-block-builder = { workspace = true, default-features = true }
