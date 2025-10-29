@@ -53,6 +53,7 @@ pub mod sync_backing {
 
 mod genesis_config_presets;
 mod test_pallet;
+mod key_gen;
 
 extern crate alloc;
 
