@@ -46,6 +46,7 @@ tuplex = { workspace = true, default-features = false }
 rand = { workspace = true, default-features = true }
 serde_json = { workspace = true, default-features = true }
 sp-api = { workspace = true, default-features = true }
+sp-keystore = { workspace = true, default-features = true }
 sp-state-machine = { workspace = true, default-features = true }
 sp-tracing = { workspace = true, default-features = true }
 substrate-test-runtime-client = { workspace = true }
@@ -91,3 +92,8 @@ serde = [
 	"sp-core/serde",
 	"sp-weights/serde",
 ]
+
+# This feature adds BLS crypto primitives.
+# It should not be used in production since the implementation and interface may still
+# be subject to significant changes.
+bls-experimental = ["sp-core/bls-experimental", "sp-io/bls-experimental", "sp-application-crypto/bls-experimental", "substrate-test-runtime-client/bls-experimental"]
