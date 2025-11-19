@@ -281,6 +281,7 @@ members = [
 	"substrate/client/consensus/pow",
 	"substrate/client/consensus/slots",
 	"substrate/client/db",
+	"substrate/client/dkg",
 	"substrate/client/executor",
 	"substrate/client/executor/common",
 	"substrate/client/executor/polkavm",
@@ -765,6 +766,7 @@ cumulus-pallet-weight-reclaim = { path = "cumulus/pallets/weight-reclaim", defau
 cumulus-pallet-xcm = { path = "cumulus/pallets/xcm", default-features = false }
 cumulus-pallet-xcmp-queue = { path = "cumulus/pallets/xcmp-queue", default-features = false }
 cumulus-ping = { path = "cumulus/parachains/pallets/ping", default-features = false }
+cumulus-keygen = { path = "cumulus/parachains/pallets/keygen-verifier", default-features = false }
 cumulus-primitives-aura = { path = "cumulus/primitives/aura", default-features = false }
 cumulus-primitives-core = { path = "cumulus/primitives/core", default-features = false }
 cumulus-primitives-parachain-inherent = { path = "cumulus/primitives/parachain-inherent", default-features = false }
